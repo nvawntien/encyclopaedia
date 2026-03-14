@@ -6,7 +6,7 @@ import { format } from "date-fns";
 import { Link } from "@/i18n/routing";
 import { getTranslations } from 'next-intl/server';
 
-export async function generateMetadata({ params }: { params: { locale: string, slug?: string[] } }) {
+export async function generateMetadata({ params }: { params: Promise<{ locale: string, slug?: string[] }> }) {
   const { locale, slug } = await params;
   if (!slug) return { title: "BrainDump" };
   
@@ -16,12 +16,10 @@ export async function generateMetadata({ params }: { params: { locale: string, s
   };
 }
 
-export default async function NotePage({
-  params,
-}: {
-  params: { locale: string; slug?: string[] };
+export default async function NotePage(props: {
+  params: Promise<{ locale: string; slug?: string[] }>;
 }) {
-  const { locale, slug: slugArray } = await params;
+  const { locale, slug: slugArray } = await props.params;
   const t = await getTranslations('Landing');
 
   if (!slugArray || slugArray.length === 0) {
