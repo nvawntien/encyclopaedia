@@ -1,0 +1,33 @@
+{
+  "Header": {
+    "search": "Search notes...",
+    "language": "Language",
+    "profile": "Profile"
+  },
+  "Sidebar": {
+    "title": "BrainDump",
+    "version": "KNOWLEDGE",
+    "noNotes": "No notes found"
+  },
+  "Note": {
+    "toc": "On this page",
+    "category": "Category",
+    "tags": "Tags",
+    "back": "Back to Home"
+  },
+  "Profile": {
+    "about": "About Me",
+    "connect": "Connect",
+    "back": "Back to Knowledge Base"
+  },
+  "Landing": {
+    "title": "Knowledge Is Power.",
+    "subtitle": "Welcome to BrainDump, your personal second brain. A minimalist, fast, and structured home for all your technical notes and reading materials.",
+    "step1Title": "01 / Navigate",
+    "step1Desc": "Use the sidebar to browse categories and folders. Everything is structured physically.",
+    "step2Title": "02 / Study",
+    "step2Desc": "Focus on reading with a distraction-free layout and clean typography.",
+    "step3Title": "03 / Refine",
+    "step3Desc": "Capture insights, organize thoughts, and build your own knowledge base."
+  }
+}

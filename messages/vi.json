@@ -1,0 +1,33 @@
+{
+  "Header": {
+    "search": "Tìm kiếm ghi chú...",
+    "language": "Ngôn ngữ",
+    "profile": "Hồ sơ"
+  },
+  "Sidebar": {
+    "title": "BrainDump",
+    "version": "KNOWLEDGE",
+    "noNotes": "Không tìm thấy ghi chú nào"
+  },
+  "Note": {
+    "toc": "Trong trang này",
+    "category": "Danh mục",
+    "tags": "Thẻ",
+    "back": "Quay lại trang chủ"
+  },
+  "Profile": {
+    "about": "Về tôi",
+    "connect": "Kết nối",
+    "back": "Quay lại kho lưu trữ"
+  },
+  "Landing": {
+    "title": "KIẾN THỨC LÀ <br /> SỨC MẠNH.",
+    "subtitle": "Chào mừng bạn đến với BrainDump, bộ não thứ hai của bạn. Một không gian tối giản, tốc độ và cấu trúc cho toàn bộ ghi chú kỹ thuật và tài liệu học tập của bạn.",
+    "step1Title": "01 / Điều hướng",
+    "step1Desc": "Sử dụng thanh bên để duyệt các phân loại và thư mục. Mọi thứ được sắp xếp theo cấu trúc vật lý.",
+    "step2Title": "02 / Học tập",
+    "step2Desc": "Tập trung vào việc đọc với bố cục không xao nhãng và hệ thống kiểu chữ sạch sẽ.",
+    "step3Title": "03 / Tinh chỉnh",
+    "step3Desc": "Ghi lại những hiểu biết, sắp xếp suy nghĩ và xây dựng kho tàng kiến thức của riêng bạn."
+  }
+}
