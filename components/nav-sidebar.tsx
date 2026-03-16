@@ -70,7 +70,7 @@ export function NavSidebar({ className, initialStructure = [] }: NavSidebarProps
 }
 
 function TreeItem({ item, activePath, depth = 0 }: { item: DirectoryItem, activePath: string, depth?: number }) {
-  const [isOpen, setIsOpen] = React.useState(true);
+  const [isOpen, setIsOpen] = React.useState(false);
   
   if (item.isDirectory) {
     return (
