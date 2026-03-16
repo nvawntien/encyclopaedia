@@ -129,6 +129,9 @@ func readFile(filename string) {
 }
 ```
 
+> **Cái bẫy của `defer`:** Các tham số truyền vào hàm `defer` được **tính toán ngay lập tức** tại thời điểm gọi lệnh `defer`, chứ không phải lúc hàm thực thi.
+> Ví dụ: nếu bạn `defer fmt.Println(c)`, giá trị của `c` được in ra sẽ là giá trị tại dòng có chữ `defer`, dù sau đó `c` có thay đổi thế nào đi nữa.
+
 ---
 
 > Hãy luôn trả về `error` như là giá trị cuối cùng trong danh sách trả về nếu Hàm của bạn có khả năng phát sinh lỗi. Đây là chuẩn mực tối thượng trong cộng đồng Go.

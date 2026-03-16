@@ -70,6 +70,17 @@ func (e *MyError) Error() string {
 -   **`errors.Is`**: Kiểm tra xem một lỗi có tương ứng với một loại lỗi cụ thể hay không (tương tự như phép so sánh `==`).
 -   **`errors.As`**: Chuyển đổi (cast) lỗi về một kiểu cấu trúc cụ thể để truy xuất các dữ liệu đặc thù.
 
+### Kỹ thuật Wrapping với `%w`
+
+Khi bạn muốn thêm ngữ cảnh cho lỗi mà không làm mất đi danh tính của lỗi gốc, hãy dùng động từ `%w` trong `fmt.Errorf`:
+
+```go
+if err != nil {
+    return fmt.Errorf("không thể kết nối DB: %w", err)
+}
+```
+Lúc này, lỗi trả về sẽ chứa thông báo mới nhưng vẫn "ngầm" giữ lỗi gốc bên trong. Nhờ vậy, ở tầng cao hơn, bạn vẫn có thể dùng `errors.Is(err, sql.ErrConnDone)` để kiểm tra chính xác nguyên nhân cốt lõi.
+
 ```go
 if errors.Is(err, os.ErrNotExist) {
     fmt.Println("Tệp tin không tồn tại trên hệ thống!")

@@ -54,7 +54,15 @@ Hãy tưởng tượng bạn đang chơi Lego. Bạn không cần một "viên g
 
 Thay vì dùng các ổ khóa (Locks/Mutexes) phức tạp để bảo vệ dữ liệu chung, Go dùng **Channels** để các tiến trình (Goroutines) trao đổi thông tin trực tiếp. Điều này giúp triệt tiêu phần lớn các lỗi Xung đột tài nguyên (Race Condition).
 
-## 6. Kết luận: Hành trình trở thành Gopher
+## 6. Go Toolchain: Bộ công cụ thực chiến
+
+Một Gopher chuyên nghiệp không thể thiếu bộ công cụ đi kèm để tối ưu hóa quy trình làm việc:
+- **`go fmt`**: Tự động định dạng mã nguồn theo chuẩn chung của Go. Bạn sẽ không bao giờ phải tranh cãi về việc đặt dấu ngoặc ở đâu.
+- **`go build`**: Biên dịch mã nguồn thành file thực thi (binary) duy nhất.
+- **`go run`**: Vừa biên dịch vừa chạy mã nguồn ngay lập tức (thường dùng khi phát triển).
+- **`go mod`**: Quản lý các thư viện phụ thuộc (dependencies).
+
+## 7. Kết luận: Hành trình trở thành Gopher
 
 Học Go không đơn thuần là học cú pháp, mà là học cách **đơn giản hóa tư duy**. Một Gopher chân chính luôn ưu tiên sự rõ ràng hơn là sự hoa mỹ (Clarity over Cleverness).
 

@@ -67,7 +67,20 @@ const Pi = 3.14
 const StatusOK = 200
 ```
 
-> **Untyped Constants:** Hằng số trong Go có độ chính xác cao và không bị gò bó vào một kiểu dữ liệu cụ thể cho đến khi được sử dụng thực tế. Điều này cho phép bạn viết mã linh hoạt hơn, ví dụ: `Math.Pi * distance` mà không cần quan tâm `distance` thuộc kiểu `float32` hay `float64`.
+> **Untyped Constants:** Hằng số trong Go có độ chính xác cao và không bị gò bó vào một kiểu dữ liệu konkrét cho đến khi được sử dụng thực tế. Điều này cho phép bạn viết mã linh hoạt hơn, ví dụ: `Math.Pi * distance` mà không cần quan tâm `distance` thuộc kiểu `float32` hay `float64`.
+
+### Đặc sản `iota` (Enumerator)
+
+Go cung cấp từ khóa `iota` để tạo ra chuỗi hằng số tăng dần một cách thanh lịch, cực kỳ hữu ích khi định nghĩa các trạng thái (Enum):
+
+```go
+const (
+    Pending = iota // 0
+    Active         // 1
+    Closed         // 2
+)
+```
+Mỗi khi xuất hiện trong một khối `const`, `iota` sẽ tự động tăng giá trị bắt đầu từ 0.
 
 ## 5. Định nghĩa kiểu dữ liệu mới (Type Declarations)
 
