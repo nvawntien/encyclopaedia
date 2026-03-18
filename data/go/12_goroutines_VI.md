@@ -76,6 +76,15 @@ So với OS Thread truyền thống:
 - Loại bỏ chi phí Context Switch nặng nề của OS Kernel.
 - Tận dụng tối đa sức mạnh đa nhân (Core CPU).
 
+**1. Mỗi Goroutine có bộ nhớ Stack riêng biệt:**
+-   **Stack riêng:** Mỗi Goroutine khi sinh ra đều được cấp một vùng nhớ riêng gọi là Stack (khởi điểm chỉ **2KB**) để lưu trữ các biến cục bộ và lời gọi hàm. Điều này giúp chúng hoạt động độc lập, không xâm phạm lẫn nhau.
+-   **Tự động co giãn (Contiguous Stacks):** Nếu 2KB không đủ, Go runtime sẽ tự động cấp thêm vùng nhớ lớn hơn và chuyển dữ liệu sang. Khác với OS Thread luôn giữ cố định 1-8MB (gây lãng phí), Goroutine chỉ dùng đúng những gì nó cần.
+
+**2. Cơ chế Hoán đổi (Context Switch) của Scheduler:**
+-   Goroutine không phải là một luồng hệ điều hành thật sự, nó là một thực thể logic chứa code và vùng nhớ Stack riêng.
+-   **Cách chạy (Pointer Swap):** Khi đến lượt một Goroutine được chạy, Go Scheduler thực hiện việc hoán đổi cực nhanh: nó cập nhật các thanh ghi của CPU (như **SP - Stack Pointer** và **PC - Program Counter**) để trỏ thẳng vào vùng Stack của Goroutine mới.
+-   **Hiệu năng:** Vì vùng nhớ Stack đã nằm sẵn trên bộ nhớ (Heap), việc chuyển đổi chỉ là thay đổi địa chỉ mà CPU trỏ tới. **Hoàn toàn không có việc sao chép dữ liệu Stack**, giúp tốc độ chuyển đổi đạt mức nano giây.
+
 #### Bảng so sánh Process vs Thread vs Goroutine
 
 | Tiêu chí | Process | Thread (OS) | Goroutine (Go) |
@@ -166,9 +175,16 @@ Khi một Goroutine thực hiện một lệnh Syscall blocking (như I/O, netwo
 - **Giải pháp:** P rảnh sẽ "ăn cắp" (steal) khoảng 1/2 số Goroutine từ Run Queue của P khác.
 - **Lợi ích:** Tránh phụ thuộc hoàn toàn vào Global Queue, giảm xung đột khóa (lock contention), và tối ưu cache locality.
 
-#### 3.3.4. Global Run Queue
+#### 3.3.4. Global Run Queue (GRQ) - Hành lang chờ chung
 
-Khi Local Queue của P bị đầy (quá 256), các Goroutine mới sẽ được đẩy vào **Global Run Queue**. Scheduler sẽ thỉnh thoảng (khoảng 1/61 lần) kiểm tra Global Queue để đảm bảo tính công bằng, tránh việc các Goroutine trong Global Queue bị "bỏ đói".
+Khi Local Queue của P bị đầy (quá 256), các Goroutine mới sinh ra sẽ được đẩy vào **Global Run Queue**. GRQ là một hàng đợi dùng chung cho toàn bộ hệ thống, được bảo vệ bởi một khóa (global lock).
+
+**Cơ chế thoát khỏi Global Queue:**
+1.  **Tính công bằng (Quy tắc 1/61):** Để tránh việc P chỉ mải mê chạy các Goroutine trong Local Queue mà "bỏ đói" (starve) các Goroutine ở Global Queue, Go scheduler áp dụng quy tắc đặc biệt: Cứ mỗi **61 ticks** (lần lập lịch), P sẽ bắt buộc phải kiểm tra GRQ trước khi xem Local Queue của chính mình.
+2.  **Lấp đầy mẻ (Batch Picking):** Khi một P rảnh rỗi hoặc đến lượt kiểm tra GRQ, nó không chỉ lấy duy nhất 1 Goroutine. Để tối ưu hóa và giảm số lần phải tranh chấp khóa (lock contention) trên GRQ, P sẽ lấy một "mẻ" (batch) Goroutine.
+    *   **Công thức:** `n = min(len(GRQ)/Gomaxprocs + 1, 128)`.
+    *   Các Goroutine này sẽ được nạp đầy vào 1/2 Local Queue của P đó để xử lý dần.
+3.  **Thứ tự ưu tiên:** Khi P đi tìm việc (`findrunnable`), thứ tự thường là: Local Queue -> **Global Queue** -> Stealing (ăn cắp từ P khác) -> Network Poller.
 
 #### 3.3.5. Network Poller (Non-blocking I/O)
 

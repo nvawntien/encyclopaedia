@@ -67,50 +67,138 @@ The efficiency of Goroutines doesn't come from magic, but from radical optimizat
 
 ### 3.1. Comparison: Process vs. OS Thread vs. Goroutine
 
+Compared to traditional OS Threads:
+- Tiny stack (starting at a few KB), automatically grows/shrinks flexibly.
+- Extremely lightweight Context Switch since it's conducted in user-space (no kernel intervention required).
+- Scheduler is fully controlled by the Go runtime instead of the Operating System.
+
+**Benefits:**
+- Avoids 1:1 mapping between Goroutines and OS Threads.
+- Eliminates the heavy Context Switch overhead of the OS Kernel.
+- Maximizes the utilization of multi-core CPUs.
+
+**1. Each Goroutine has its own Stack memory:**
+-   **Individual Stack:** Each Goroutine is born with its own dedicated memory area called a Stack (starting at just **2KB**) to store local variables and function calls. This allows them to operate independently without interfering with each other.
+-   **Dynamic Scaling (Contiguous Stacks):** If 2KB is insufficient, the Go runtime automatically allocates a larger memory area and moves the data over. Unlike OS Threads, which always hold a fixed 1-8MB (leading to waste), Goroutines use only what they actually need.
+
+**2. Scheduler's Context Switch Mechanism:**
+-   A Goroutine is not a real operating system thread; it is a logical entity containing code and its own Stack area.
+-   **Execution (Pointer Swap):** When it is a Goroutine's turn to run, the Go Scheduler performs an ultra-fast swap: it updates CPU registers (such as **SP - Stack Pointer** and **PC - Program Counter**) to point directly to the new Goroutine's Stack.
+-   **Performance:** Since the Stack memory already exists in memory (Heap), the switch is simply a change in the address the CPU points to. **No stack data is ever copied**, allowing the switch speed to reach nanosecond levels.
+
+#### Comparison Table: Process vs. OS Thread vs. Goroutine
+
 | Metric | Process | OS Thread | Goroutine |
 | :--- | :--- | :--- | :--- |
-| **Nature** | Resource isolation unit | Execution unit within process | Logic execution unit in Go |
-| **Managed By** | OS Kernel | OS Kernel | **Go Runtime** |
-| **Memory Space** | Isolated | Shared within process | Shared within process |
-| **Stack Size** | Large, fixed | ~1–8 MB, fixed | **~2 KB, dynamic (growable)** |
-| **Creation Cost** | Very expensive | Expensive | **Ultralight / Cheap** |
-| **Context Switch** | Very slow (Kernel-space) | Slow (Kernel-space) | **Extremely fast (User-space)** |
-| **Max Quantity** | Very few | Several thousand | **Millions** |
-| **Communication** | IPC | Shared memory | **Channels / Shared memory** |
-| **Scalability** | Poor | Moderate | **Excellent** |
+| **Nature** | Resource isolation unit | Execution unit within process | Logic unit in Go |
+| **Managed By** | OS Kernel | OS Kernel | Go runtime |
+| **Memory Space** | Isolated | Shared | Shared |
+| **Heap** | Private | Shared | Shared |
+| **Stack** | Private | Private | Private |
+| **Stack Size** | Large, fixed | ~1–8 MB, fixed | ~2 KB, dynamic |
+| **New Creation** | Very expensive | Expensive | Very cheap |
+| **Context Switch** | Very expensive (Kernel) | Expensive (Kernel) | Cheap (User-space) |
+| **Scheduling** | Kernel | Kernel | Go scheduler |
+| **Max Quantity** | Very few | Several thousand | Hundreds of thousands – millions |
+| **Communication** | IPC | Shared memory | Channels / shared memory |
+| **Scalability** | Poor | Moderate | Very good |
+| **Design Goal** | Safety, isolation | Parallelism | Efficient concurrency |
 
 ### 3.2. The G-M-P Scheduler Model
-G-M-P is the internal architecture used to map millions of logical Goroutines onto a small number of physical OS Threads.
 
-- **G (Goroutine)**: The unit of logic. Contains the function, stack (~2KB), and metadata (status, panic info, etc.).
-- **M (Machine)**: A physical OS Thread that executes CPU instructions. M is the "worker".
-- **P (Processor)**: An abstract execution resource. M must hold a P to execute G code.
-- **GOMAXPROCS**: The number of available Ps (defaults to the number of CPU cores).
+-   **Goroutine**: Consumes only about **2KB** at start and has the ability to grow flexibly (growable stacks).
 
-**Special Internal Entities:**
-- **Local Run Queue**: Each P maintains a queue of up to **256 Gs**. It also features a `runnext` slot for the highest priority Goroutine (e.g., one that just woke up).
-- **M0 (Machine 0)**: The first thread created to initialize the runtime and run `main`.
-- **G0 (Goroutine 0)**: Every M has a G0 that runs on the **System Stack** to handle scheduling, memory allocation, and GC tasks.
+GMP is the scheduler model of the Go runtime, used to map logical units of work (Goroutines) onto physical execution units (OS Thread/Machine) efficiently. Go uses a highly intelligent internal scheduler. Instead of letting the Operating System manage millions of Threads, the Go Scheduler distributes millions of Goroutines (G) onto a small number of operating system threads (M) via logical processors (P). This ensures that context switching happens extremely fast.
 
-### 3.3. Senior-Level Scheduling Mechanisms
+- **G (Goroutine)**: Logical unit of work.
+- **M (Machine)**: OS Thread/Physical internal thread.
+- **P (Processor)**: Intermediate execution resource, holding the right to run Go code.
 
-#### 1. Execution Flow & Work Stealing
-- Gs are placed into P's Local Queue. An available M grabs a P and executes Gs from its queue.
-- **Work Stealing**: If a P runs out of work, it will "steal" roughly 50% of the Gs from another P's Local Queue or fetch from the **Global Run Queue**. (The scheduler checks the Global Queue every 1/61 ticks to prevent G starvation).
+#### 3.2.1. G – Goroutine (Unit of Work)
 
-#### 2. Handling Blocking Syscalls
-When a G performs a blocking syscall:
-- M immediately releases P so that another available M can take over P and continue executing other Gs.
-- Once the syscall completes, the original G attempts to re-acquire a P (or is moved to the Global Queue).
+| Criteria | Detailed Description |
+| :--- | :--- |
+| **Nature** | A logical task, not a Thread. Very lightweight (stack of a few KB, can grow/shrink). Not fixed to an OS Thread. |
+| **Role** | Contains: The function to run, Stack, and Metadata (status, pointers, panic info...). |
+| **Key Point** | Goroutines do not run on their own. They must be assigned to a P and run on an M. |
 
-#### 3. Network Poller (Non-blocking I/O)
-Go handles millions of network connections efficiently via the **Network Poller**:
-- When a G requests I/O (e.g., socket read/write), it doesn't block M. Instead, it is moved to the Network Poller (utilizing OS primitives like `epoll/kqueue/IOCP`).
-- M remains free to run other Gs. Once I/O is ready, the Network Poller notifies the scheduler to move G back to a Run Queue.
+#### 3.2.2. M – Machine (OS Thread)
 
-#### 4. Scheduler Preemption
-- **Before Go 1.14**: Cooperative scheduling. A G had to manually yield or perform a function call to be descheduled.
-- **Go 1.14+**: **Asynchronous Preemption**. The runtime sends signals to forcibly preempt Gs that run for too long (e.g., tight loops), ensuring fairness and system stability.
+| Criteria | Detailed Description |
+| :--- | :--- |
+| **Nature** | A real OS Thread created and managed by the Go runtime. |
+| **Role** | Actually executes CPU instructions. Runs Go code or is blocked by syscalls. |
+| **Key Point** | The number of Ms can be greater than Ps. M does not own the work; it is just the "worker" that executes it. |
+
+#### 3.2.3. P – Processor (Scheduling Core)
+
+| Criteria | Detailed Description |
+| :--- | :--- |
+| **Nature** | P is not a CPU. P represents: The right to run Go code and comes with a local run queue to hold Goroutines. |
+| **Role** | Holds the local Run Queue of Goroutines, Cache allocator, GC state. Coordinates Goroutines very fast without global locks. |
+| **Relationship** | 1 P ↔ maximum 1 M at a time. M must have a P to run Go code. |
+| **GOMAXPROCS** | Number of Ps is determined by the `GOMAXPROCS` environment variable (defaults to the number of CPU cores). |
+| **Local Run Queue** | Each P owns a private queue containing up to **256** Goroutines waiting to run. There is also a special slot called `runnext` to prioritize the Goroutine that just woke up. |
+
+#### 3.2.4. Special Internal Entities
+
+- **M0 (Machine 0)**: The first thread created when the program starts. It is responsible for initializing the runtime and executing the `main` function.
+- **G0 (Goroutine 0)**: Every M is accompanied by a G0. G0 does not run user code but runs on the **System Stack** to perform scheduling, memory allocation, and GC management tasks.
+
+### 3.3. Smart Scheduling Mechanisms
+
+#### 3.3.1. Execution Flow
+
+1. Goroutine (G) is created and put into P's Run Queue.
+2. A ready OS Thread (M) will grab a Processor (P).
+3. M takes a Goroutine (G) from P's Run Queue.
+4. M executes that Goroutine.
+
+Goroutine termination states:
+- **Finished** → Exit.
+- **Blocked** → Detached from M.
+- **Voluntary Yield** → Hands CPU back to another Goroutine.
+
+> **Summary:** M runs, P coordinates, G is the work.
+
+#### 3.3.2. Handling Blocking Syscalls
+
+When a Goroutine performs a blocking syscall (e.g., I/O, network), the OS Thread (M) will be blocked along with it. If M holds P, all other Goroutines on that P will stall.
+
+**Go's solution:**
+- When a Goroutine enters a blocking syscall: M releases P (allowing the blocked Goroutine to run on M without needing P).
+- P is immediately assigned to another idle M.
+- **Result:** When the syscall is done, the Goroutine returns to the Run Queue. Other Goroutines on P continue to be scheduled and run without interruption.
+
+#### 3.3.3. Work Stealing (Load Balancing)
+
+- **Problem:** One Processor (P) is idle while another P is overloaded with too many Goroutines in its queue.
+- **Solution:** The idle P will "steal" roughly 1/2 of the Goroutines from another P's Run Queue.
+- **Benefit:** Avoids total dependence on the Global Queue, reduces lock contention, and optimizes cache locality.
+
+#### 3.3.4. Global Run Queue (GRQ) - Shared Waiting Hall
+
+When P's Local Queue is full (over 256), newly created Goroutines are pushed into the **Global Run Queue**. The GRQ is a shared queue for the entire system, protected by a global lock.
+
+**Retrieval from Global Queue:**
+1.  **Fairness (1/61 Rule):** To prevent cases where a P only runs Goroutines in its Local Queue and "starves" Goroutines in the Global Queue, the Go scheduler applies a special rule: Every **61 ticks** (scheduling events), P is forced to check the GRQ before looking at its own Local Queue.
+2.  **Batch Picking:** When a P is idle or it's its turn to check the GRQ, it doesn't just take one Goroutine. To optimize and reduce lock contention on the GRQ, P fetches a "batch" of Goroutines.
+    *   **Formula:** `n = min(len(GRQ)/Gomaxprocs + 1, 128)`.
+    *   These Goroutines are filled into half of the P's Local Queue to be processed sequentially.
+3.  **Priority Order:** When a P searches for work (`findrunnable`), the order is usually: Local Queue -> **Global Queue** -> Stealing (from other Ps) -> Network Poller.
+
+#### 3.3.5. Network Poller (Non-blocking I/O)
+
+Go handles millions of network connections without needing millions of OS Threads thanks to the **Network Poller**.
+
+- **Mechanism:** When a Goroutine requests network I/O (read/write socket), it is put into the Network Poller (using OS mechanisms like `epoll`, `kqueue`, or `IOCP`).
+- **Benefit:** The OS Thread (M) is not blocked. M can stay free to run other Goroutines. When I/O is ready, the Network Poller notifies the scheduler to put the Goroutine back into a Run Queue.
+
+#### 3.3.6. Scheduler Preemption
+
+Go scheduler is a **Cooperative Scheduler**, meaning Goroutines must manually yield at check points (usually function calls).
+
+- **From Go 1.14 onwards:** Go introduced **Asynchronous Preemption**. If a Goroutine runs for too long (e.g., an infinite loop with no function calls), the runtime sends a signal to force it to stop and make room for others. This keeps the system stable and prevents "greedy" Goroutines from hogging the CPU.
 
 ---
 
