@@ -201,38 +201,86 @@ Go scheduler là một **Cooperative Scheduler** (hợp tác), nghĩa là Gorout
 
 ## 4. Quản trị vòng đời & An toàn
 
-### 4.1. Goroutine Leaks
+### 4.1. Concurrency Leaks: Phân loại & Kịch bản
 
-**Goroutine leak** xảy ra khi một Goroutine bị treo (block) vĩnh viễn và không bao giờ thoát khỏi chương trình. Sự cố này khiến bộ nhớ stack của Goroutine đó và các tài nguyên nó đang nắm giữ (như file descriptors, locks) không bao giờ được giải phóng, dẫn đến lãng phí bộ nhớ và CPU, làm hệ thống cạn kiệt tài nguyên theo thời gian.
+**Concurrency Leak** xảy ra khi các tài nguyên (Goroutine, Context, Timer, Connection) bị treo hoặc không được giải phóng, dẫn đến lãng phí tài nguyên và làm hệ thống cạn kiệt theo thời gian.
 
-#### 4.1.1. Các kịch bản gây Leak phổ biến
+#### 4.1.1. Hệ sinh thái 5 loại Leak thường gặp
 
-- **1. Gửi dữ liệu vào Channel mà không có ai nhận**: 
-  - **Bị Block như nào**: Khi một Goroutine gửi dữ liệu (`ch <- data`) vào một unbuffered channel nhưng không có Goroutine nào sẵn sàng nhận ở đầu kia.
-  - **Vì sao Leak**: Nếu Goroutine nhận bị thoát trước hoặc không bao giờ được tạo ra, Goroutine gửi sẽ bị treo vĩnh viễn tại dòng lệnh gửi.
+Trong Go, tài nguyên không chỉ bị rò rỉ qua Goroutine mà còn qua các thực thể runtime và bộ nhớ. Một lập trình viên cần phân biệt rõ 5 nhóm chính:
 
-- **2. Nhận từ Channel mà không có ai gửi**: 
-  - **Bị Block như nào**: Khi Goroutine cố gắng nhận dữ liệu (`<-ch`) từ một channel rỗng (kể cả buffered channel đã cạn) và không còn Goroutine nào gửi dữ liệu vào đó.
-  - **Vì sao Leak**: Nếu Goroutine gửi bị lỗi (crash) hoặc thoát sớm, Goroutine nhận sẽ chờ vô thời hạn.
+| Loại Leak | Nguyên nhân chính (Thủ phạm) | Hậu quả (Triệu chứng) |
+| :--- | :--- | :--- |
+| **Goroutine Leak** | G bị block vĩnh viễn (do Channel, Mutex, WaitGroup). | Tăng RAM (Stack), tăng CPU overhead cho Scheduler. |
+| **Context Leak** | Quên gọi hàm `cancel()` từ `WithCancel` hoặc `WithTimeout`. | Giữ lại các timers, references trong Context tree. |
+| **Timer Leak** | Sử dụng `time.After` sai cách bên trong vòng lặp. | RAM Heap tăng dần do các Timer struct rác tích tụ. |
+| **Resource Leak** | Không `close()` HTTP Body, File, hoặc DB Connection. | Gây Goroutine Leak ngầm (ngốn worker/connection). |
+| **Memory Leak** | Giữ tham chiếu mảng lớn qua slice nhỏ truyền giữa các G. | RAM tăng cao, GC không thu hồi được mảng gốc (Pinning). |
 
-- **3. Deadlock do Mutex**: 
-  - **Bị Block như nào**: Goroutine cố lấy một Lock (`mutex.Lock()`) nhưng Lock đó lại đang bị giữ bởi chính nó hoặc bởi một Goroutine khác tạo ra vòng lặp chờ tài nguyên (deadlock chu kỳ).
-  - **Vì sao Leak**: Goroutine treo vĩnh viễn chờ đợi Lock không bao giờ được nhả.
+> Các loại leak này thường tạo thành một chuỗi. Ví dụ: **Resource Leak** (quên đóng Body) -> trực tiếp giữ một **Goroutine ngầm** (G leak) để quản lý connection -> G leak này lại giữ tham chiếu tới **Context** (Context leak). Vì vậy, hãy tìm "nguồn phát" tài nguyên thay vì chỉ đi tìm "số lượng Goroutine".
 
-- **4. Chờ I/O hoặc System Call không thiết lập Timeout**: 
-  - **Bị Block như nào**: Goroutine thực hiện I/O (gọi API mạng, đọc file, kết nối DB) mà không có thời gian chờ (timeout).
-  - **Vì sao Leak**: Nếu mất mạng hoặc server đích sập, OS Thread (M) sẽ block vô thời hạn kéo theo Goroutine bị leak.
+#### 4.1.2. Các kịch bản rò rỉ thực tế (Detailed Case Studies)
 
-#### 4.1.2. Giải pháp ngăn chặn Goroutine Leak (Best Practices)
+Dưới đây là chi tiết cơ chế và lý do gây rò rỉ cho từng kịch bản cụ thể:
 
-Để ngăn chặn, cần đảm bảo mọi Goroutine có một cơ chế thoát được kiểm soát chặt chẽ:
+**A. Goroutine Leak (Phổ biến nhất)**
+Hiện tượng Goroutine bị treo vô hạn tại các điểm đồng bộ hóa hoặc I/O:
 
-1.  **Sử dụng `select` cho Channel và Context**: Luôn dùng khối `select` để kết hợp gửi/nhận channel với việc mở lối thoát thông qua tín hiệu hủy bỏ (`channel done` hoặc `context.Done()`).
-2.  **Dùng `context.Context` cho Timeout/Hủy bỏ**:
-    - Sử dụng `context.WithCancel` hoặc `context.WithTimeout` và truyền context này vào các hàm I/O/Network để giới hạn thời gian thực thi.
-    - Goroutine phải chủ động kiểm tra `ctx.Done()` và return ngay lập tức.
-3.  **Đóng Channel (`close`) Có Trách Nhiệm**: Chỉ một Goroutine duy nhất (thường là Goroutine gửi tiến trình) được phép `close` channel. Đóng channel đúng lúc giúp đánh thức các vòng lặp `range` ở đầu nhận.
-4.  **Sử dụng Buffered Channel có cân nhắc**: Giúp Goroutine gửi giảm tình trạng bị đứng tức khắc. Tuy nhiên, nếu buffer bị đầy mà đầu kia không ai xử lý, tình trạng block và leak vẫn sẽ diễn ra.
+1.  **Gửi vào Channel mà không có người nhận**: 
+    *   **Cơ chế**: Gửi dữ liệu (`ch <- data`) vào unbuffered channel nhưng không có Goroutine nào sẵn sàng nhận (`<-ch`).
+    *   **Bị Block như nào**: Goroutine gửi sẽ bị "đứng" vĩnh viễn tại chính dòng lệnh đó.
+    *   **Lý do Leak**: Nếu Goroutine nhận bị thoát sớm hoặc không bao giờ được tạo, tài nguyên Stack của G gửi không bao giờ được giải phóng.
+
+2.  **Nhận từ Channel mà không có người gửi**: 
+    *   **Cơ chế**: Cố nhận dữ liệu (`<-ch`) từ một channel rỗng (hoặc buffered channel đã hết dữ liệu) và không còn G nào gửi vào nữa.
+    *   **Bị Block như nào**: Goroutine nhận sẽ rơi vào trạng thái chờ vô thời hạn.
+    *   **Lý do Leak**: Nếu Goroutine gửi bị crash hoặc thoát mà không `close(ch)`, G nhận sẽ kẹt lại mãi mãi.
+
+3.  **Deadlock do Mutex**: 
+    *   **Cơ chế**: Goroutine cố lấy một Lock (`mutex.Lock()`) nhưng Lock đó đang bị giữ bởi chính nó hoặc tạo vòng lặp chờ với G khác.
+    *   **Bị Block như nào**: Treo vĩnh viễn ở trạng thái "Waiting for Lock".
+    *   **Lý do Leak**: Go không hỗ trợ Reentrant Lock, dẫn đến việc G tự block chính mình.
+
+4.  **Chờ I/O không có Timeout**: 
+    *   **Cơ chế**: Gọi API mạng, đọc file, hoặc kết nối DB mà không thiết lập thời gian chờ (timeout/deadline).
+    *   **Bị Block như nào**: Khi server đích sập hoặc mất mạng, Goroutine và OS Thread (M) sẽ bị treo cứng.
+    *   **Lý do Leak**: Không có cơ chế tự thoát khi gặp sự cố ngoại cảnh.
+
+**B. Context Leak**
+- **Ví dụ**: Gọi `ctx, _ := context.WithTimeout(...)` nhưng không gọi `defer cancel()`.
+- **Cơ chế**: Go runtime duy trì một timer nội bộ và các tham chiếu trong cây context cho đến khi context cha kết thúc.
+- **Hệ quả**: Nếu hàm này được gọi liên tục, các timer "rác" sẽ lấp đầy bộ nhớ trước khi kịp hết hạn tự nhiên.
+
+**C. Timer Leak**
+- **Ví dụ**: Sử dụng `time.After(time.Hour)` bên trong một vòng lặp `for-select`.
+- **Cơ chế**: Mỗi lần gọi `time.After` sẽ tạo một Timer mới. Nếu case `Default` được chọn, Timer 1 tiếng này vẫn "sống" trong runtime heap.
+- **Hệ quả**: RAM Heap tăng tỉ lệ thuận với số lần lặp, dù các tác vụ logic đã hoàn thành.
+
+**D. Resource Leak (Ẩn sau Goroutine Leak)**
+- **Ví dụ**: Quên `resp.Body.Close()` sau khi gọi HTTP request.
+- **Cơ chế**: Thư viện `net/http` duy trì một Goroutine đọc ngầm để tái sử dụng connection (keep-alive).
+- **Hệ quả**: Cạn kiệt connection pool và làm tăng số lượng Goroutine mồ côi mà bạn không hề code trực tiếp.
+
+**E. Memory Leak (Pinning Memory)**
+- **Ví dụ**: Cắt một slice nhỏ từ một mảng khổng lồ (`huge[:10]`) và giữ/gửi slice này đi.
+- **Cơ chế**: Slice nhỏ vẫn giữ tham chiếu đến toàn bộ mảng gốc (Backing Array).
+- **Hệ quả**: Garbage Collector (GC) không thể thu hồi mảng khổng lồ đó, gây lãng phí RAM nghiêm trọng.
+
+> **Ghi nhớ:** Goroutine Leak là "bề nổi của tảng băng", còn Context/Resource Leak thường là phần chìm gây ra nó.
+
+#### 4.1.3. Chiến lược tiếp cận An toàn (Performance & Reliability)
+
+Để xây dựng hệ thống bền bỉ (Reliability) và tối ưu (Performance), hãy áp dụng các kỹ thuật sau:
+
+1.  **Quản lý Quyền sở hữu (Ownership):** Mọi Goroutine khi sinh ra phải có một "Chủ sở hữu" chịu trách nhiệm về vòng đời của nó. Sử dụng `context.Context` để truyền tín hiệu hủy bỏ xuyên suốt.
+2.  **Nguyên tắc "Lối thoát cưỡng bức":** 
+    *   **Channel**: Luôn kết hợp `select` với `ctx.Done()` để đảm bảo Goroutine luôn có đường thoát.
+    *   **I/O**: Luôn thiết lập `Timeout/Deadline` cho mọi kết nối ngoại vi.
+3.  **Dọn dẹp tài nguyên (Cleanup):** Luôn sử dụng lệnh `defer` ngay sau khi khởi tạo: `defer cancel()`, `defer resp.Body.Close()`, `defer rows.Close()`.
+4.  **Quan sát & Kiểm thử (Observability & Testing):**
+    *   **Profiling**: Dùng `pprof` để phân tích đồ thị Goroutine (`/debug/pprof/goroutine?debug=2`).
+    *   **Metric**: Theo dõi `runtime.NumGoroutine()` để phát hiện sớm các dấu hiệu tăng bất thường.
+    *   **Unit Test**: Tích hợp `go.uber.org/goleak` để chặn đứng code có leak ngay từ khâu CI/CD (ví dụ: `defer goleak.VerifyNone(t)`).
 
 ### 4.2. Panic và Recover trong Goroutine (Quy tắc an toàn)
 

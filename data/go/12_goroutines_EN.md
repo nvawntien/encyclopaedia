@@ -204,19 +204,86 @@ Go scheduler is a **Cooperative Scheduler**, meaning Goroutines must manually yi
 
 ## 4. Lifecycle Management & Safety
 
-### 4.1. Goroutine Leaks
-A leak occurs when a Goroutine is blocked forever and never exits, causing its stack memory and other resources (file descriptors, locks) to be held indefinitely.
+### 4.1. Concurrency Leaks: Taxonomy & Scenarios
 
-**Common Leak Scenarios:**
-- **Sending to an unbuffered channel with no receiver**: The sender blocks forever.
-- **Receiving from an empty channel with no sender**: The receiver waits indefinitely.
-- **Mutex Deadlocks**: Circular resource dependency preventing G from finishing.
-- **I/O without Timeouts**: Network failures or hanging servers blocking the OS Thread (M) and consequently the G.
+**Concurrency Leak** occurs when resources (Goroutines, Contexts, Timers, Connections) are stalled or not released, leading to resource waste and system exhaustion over time.
 
-**Prevention Best Practices:**
-- Always use `select` statements with `context.Done()` to provide an exit path.
-- Implement `context.WithTimeout` or `context.WithCancel` for all I/O and network operations.
-- Ensure only one Goroutine (the Sender) is responsible for `close()`ing a channel.
+#### 4.1.1. Ecosystem of 5 Common Leak Types
+
+In Go, resources are not only leaked through Goroutines but also through other runtime entities and memory. Five main groups must be distinguished:
+
+| Leak Type | Root Cause (Culprit) | Impact (Symptoms) |
+| :--- | :--- | :--- |
+| **Goroutine Leak** | G is permanently blocked (Channel, Mutex, WaitGroup). | Increased RAM (Stack), CPU overhead for the Scheduler. |
+| **Context Leak** | Forgetting to call `cancel()` from `WithCancel` or `WithTimeout`. | Retention of timers and references within the Context tree. |
+| **Timer Leak** | Misusing `time.After` inside a loop. | Gradual heap RAM increase due to accumulated junk Timer structs. |
+| **Resource Leak** | Not `close()`ing HTTP Body, File, or DB Connection. | Causes background Goroutine leaks (starving workers/connections). |
+| **Memory Leak** | Holding large array references via small slices passed between Gs. | Higher RAM usage, GC cannot reclaim the original array (Pinning). |
+
+These leaks often form a chain. For example: **Resource Leak** (forgetting to close Body) -> directly holds a **background Goroutine** (G leak) to manage the connection -> this G leak in turn holds onto the **Context** (Context leak). Therefore, look for the "resource origin" rather than just counting Goroutines.
+
+#### 4.1.2. Practical Leak Scenarios (Detailed Case Studies)
+
+Below are detailed mechanisms and reasons for leaks in specific scenarios:
+
+**A. Goroutine Leak (Most Common)**
+The phenomenon where a Goroutine hangs indefinitely at synchronization points or I/O:
+
+1.  **Sending to a Channel with no Receiver**: 
+    *   **Mechanism**: Sending data (`ch <- data`) to an unbuffered channel with no Goroutine ready to receive (`<-ch`).
+    *   **Blocking Behavior**: The sending Goroutine "stalls" permanently at that specific line.
+    *   **Root Cause**: If the receiver Goroutine exits early or is never created, the sender's Stack resource is never released.
+
+2.  **Receiving from a Channel with no Sender**: 
+    *   **Mechanism**: Attempting to receive (`<-ch`) from an empty channel (or an exhausted buffered channel) where no more Gs will send.
+    *   **Blocking Behavior**: The receiving Goroutine enters an indefinite waiting state.
+    *   *Root Cause**: If the sending Goroutine crashes or exits without `close(ch)`, the receiver remains trapped forever.
+
+3.  **Mutex Deadlock**: 
+    *   **Mechanism**: A Goroutine attempts to acquire a Lock (`mutex.Lock()`) that is already held by itself or forms a wait-cycle with another G.
+    *   **Blocking Behavior**: Permanent hang in the "Waiting for Lock" state.
+    *   **Root Cause**: Go does not support Reentrant Locks, leading to G blocking itself.
+
+4.  **I/O without Timeout**: 
+    *   **Mechanism**: Calling network APIs, reading files, or connecting to a DB without setting a timeout/deadline.
+    *   **Blocking Behavior**: When the target server hangs or the network is lost, the Goroutine and its OS Thread (M) are "frozen."
+    *   **Root Cause**: Lack of a forced exit mechanism when external events fail.
+
+**B. Context Leak**
+- **Example**: Calling `ctx, _ := context.WithTimeout(...)` but forgetting `defer cancel()`.
+- **Mechanism**: The Go runtime maintains an internal timer and references in the context tree until the parent context finishes.
+- **Impact**: If this function is called continuously, "junk" timers fill up memory before they naturally expire.
+
+**C. Timer Leak**
+- **Example**: Using `time.After(time.Hour)` inside a `for-select` loop.
+- **Mechanism**: Each call to `time.After` creates a new Timer. If the `Default` case is chosen, the 1-hour Timer remains "alive" in the runtime heap.
+- **Impact**: Heap RAM increases proportionally with the number of iterations, even if the logic is done.
+
+**D. Resource Leak (Hidden Goroutine Leak)**
+- **Example**: Forgetting `resp.Body.Close()` after an HTTP request.
+- **Mechanism**: The `net/http` library maintains a background reading Goroutine to reuse the connection (keep-alive).
+- **Impact**: Connection pool exhaustion and an increase in "orphaned" Goroutines not directly authored by you.
+
+**E. Memory Leak (Pinning Memory)**
+- **Example**: Slicing a small portion from a massive array (`huge[:10]`) and holding/sending that slice.
+- **Mechanism**: The small slice still holds a reference to the entire backing array.
+- **Impact**: The Garbage Collector (GC) cannot reclaim the massive array, causing significant RAM waste.
+
+> **Remember:** Goroutine Leak is the "tip of the iceberg," while Context/Resource Leaks are often the submerged part causing it.
+
+#### 4.1.3. Safety Strategies (Performance & Reliability)
+
+To build resilient (Reliability) and optimized (Performance) concurrent systems, follow these techniques:
+
+1.  **Ownership Management:** Every Goroutine born must have an "Owner" responsible for its lifecycle. Use `context.Context` to propagate cancellation signals throughout the tree.
+2.  **"Forced Exit" Principle:** 
+    *   **Channel**: Always combine `select` with `ctx.Done()` to ensure the Goroutine always has a way out.
+    *   **I/O**: Always set a `Timeout/Deadline` for every external connection.
+3.  **Resource Cleanup:** Always use `defer` immediately after initialization: `defer cancel()`, `defer resp.Body.Close()`, `defer rows.Close()`.
+4.  **Observability & Testing:**
+    *   **Profiling**: Use `pprof` to analyze Goroutine graphs (`/debug/pprof/goroutine?debug=2`).
+    *   **Metrics**: Monitor `runtime.NumGoroutine()` to detect early signs of abnormal growth.
+    *   **Testing**: Integrate `go.uber.org/goleak` into your Unit Tests to catch leaks during CI/CD (e.g., `defer goleak.VerifyNone(t)`).
 
 ### 4.2. Panic and Recover Rules
 **A panic in any Goroutine will crash the entire program**, even if `main` has a `recover()`.
